@@ -10,6 +10,8 @@ export default function Home() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; current: string } | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
 
   const addFiles = (incoming: FileList | File[]) => {
     const pdfs = Array.from(incoming).filter(
@@ -30,16 +32,31 @@ export default function Home() {
   const parse = async () => {
     if (!files.length) return;
     setLoading(true);
-    try {
-      const fd = new FormData();
-      files.forEach((f) => fd.append('files', f));
-      const res = await fetch('/api/parse', { method: 'POST', body: fd });
-      const data = await res.json();
-      setRows((prev) => [...prev, ...(data.rows ?? [])]);
-      setFiles([]);
-    } finally {
-      setLoading(false);
+    setErrors([]);
+    const total = files.length;
+    const collected: Row[] = [];
+    const failures: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setProgress({ done: i, total, current: f.name });
+      try {
+        const fd = new FormData();
+        fd.append('files', f);
+        const res = await fetch('/api/parse', { method: 'POST', body: fd });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (Array.isArray(data.rows)) collected.push(...data.rows);
+      } catch (e: any) {
+        failures.push(`${f.name}: ${e?.message ?? 'failed'}`);
+        collected.push({ _file: f.name, _error: e?.message ?? 'failed' });
+      }
+      // Stream rows in as we go so the user sees progress
+      setRows((prev) => [...prev, ...collected.splice(0)]);
     }
+    setProgress({ done: total, total, current: '' });
+    setErrors(failures);
+    setFiles([]);
+    setLoading(false);
   };
 
   const columns = useMemo(() => {
@@ -128,6 +145,34 @@ export default function Home() {
           >
             {loading ? 'Parsing…' : `Parse ${files.length} file${files.length === 1 ? '' : 's'}`}
           </button>
+        </div>
+      )}
+
+      {progress && loading && (
+        <div className="mt-4 rounded border bg-white p-4">
+          <div className="mb-2 flex justify-between text-sm">
+            <span className="font-medium">
+              {progress.done} / {progress.total} parsed
+            </span>
+            <span className="truncate text-slate-500">{progress.current}</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded bg-slate-200">
+            <div
+              className="h-full bg-blue-600 transition-all"
+              style={{ width: `${(progress.done / progress.total) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {errors.length > 0 && (
+        <div className="mt-4 rounded border border-red-200 bg-red-50 p-4 text-sm">
+          <div className="mb-1 font-medium text-red-800">{errors.length} file{errors.length === 1 ? '' : 's'} failed</div>
+          <ul className="space-y-0.5 text-red-700">
+            {errors.map((e, i) => (
+              <li key={i} className="truncate">• {e}</li>
+            ))}
+          </ul>
         </div>
       )}
 
